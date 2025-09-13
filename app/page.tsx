@@ -1,103 +1,140 @@
-import Image from "next/image";
+'use client';
+import { useEffect, useRef, useState } from 'react';
+import { supabase } from '@/lib/supabaseClient';
+
+type WordRow = { id: string; meanings: string[]; reference_paths: string[] };
 
 export default function Home() {
-  return (
-    <div className="font-sans grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="font-mono list-inside list-decimal text-sm/6 text-center sm:text-left">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] font-mono font-semibold px-1 py-0.5 rounded">
-              app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
+  const [current, setCurrent] = useState<WordRow | null>(null);
+  const [userPath, setUserPath] = useState<string>('');
+  const [points, setPoints] = useState<string>('');
+  const drawing = useRef(false);
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
-        </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
-    </div>
+  // refs for drawing surface
+  const svgRef = useRef<SVGSVGElement | null>(null);
+
+  // refs for reference paths measurement
+  const refSvgRef = useRef<SVGSVGElement | null>(null);
+  const refGroupRef = useRef<SVGGElement | null>(null);
+  const [viewBox, setViewBox] = useState<string>('0 0 400 140');
+
+  async function loadWord() {
+    const { data, error } = await supabase.rpc('get_random_word');
+    if (error) console.error(error);
+    if (data && data.length) setCurrent(data[0]);
+    setUserPath('');
+    setPoints('');
+  }
+
+  useEffect(() => { loadWord(); }, []);
+
+  // Measure the true bounds of all reference paths and set a viewBox that hugs the content.
+  useEffect(() => {
+    if (!current) return;
+    const pad = 16;
+
+    // Wait a tick so paths are in the DOM before measuring
+    const id = requestAnimationFrame(() => {
+      try {
+        const g = refGroupRef.current;
+        if (!g) return;
+        const box = g.getBBox(); // accurate for lines/curves/arc control points
+        const x = box.x - pad;
+        const y = box.y - pad;
+        const w = Math.max(box.width + pad * 2, 1);
+        const h = Math.max(box.height + pad * 2, 1);
+        setViewBox(`${x} ${y} ${w} ${h}`);
+      } catch (e) {
+        // Fallback if getBBox fails
+        setViewBox('0 0 400 140');
+      }
+    });
+    return () => cancelAnimationFrame(id);
+  }, [current]);
+
+  // --- Drawing handlers (fixed 400x140 canvas) ---
+  function pointerDown(e: React.PointerEvent<SVGSVGElement>) {
+    drawing.current = true;
+    const p = cursor(e);
+    setPoints(`${p.x},${p.y}`);
+  }
+  function pointerMove(e: React.PointerEvent<SVGSVGElement>) {
+    if (!drawing.current) return;
+    const p = cursor(e);
+    setPoints(prev => (prev ? `${prev} ${p.x},${p.y}` : `${p.x},${p.y}`));
+    const pts = (points ? `${points} ${p.x},${p.y}` : `${p.x},${p.y}`).split(' ');
+    const path = pts.reduce((acc, xy, i) => {
+      const [x, y] = xy.split(',');
+      return acc + (i === 0 ? `M${x} ${y}` : ` L${x} ${y}`);
+    }, '');
+    setUserPath(path);
+  }
+  function pointerUp() { drawing.current = false; }
+
+  function cursor(e: React.PointerEvent<SVGSVGElement>) {
+    const svg = svgRef.current!;
+    const pt = svg.createSVGPoint();
+    pt.x = e.clientX; pt.y = e.clientY;
+    const ctm = svg.getScreenCTM();
+    const inv = ctm?.inverse();
+    const p = pt.matrixTransform(inv!);
+    return { x: Math.round(p.x), y: Math.round(p.y) };
+  }
+
+  async function submit() {
+    if (!current || !userPath) { alert('Draw something first'); return; }
+    const { error } = await supabase.from('drawings').insert({
+      word_id: current.id,
+      meanings: current.meanings,
+      reference_paths: current.reference_paths,
+      user_path: userPath,
+      client_id: typeof window !== 'undefined' ? window.navigator.userAgent : null
+    });
+    if (error) { console.error(error); alert('Save failed'); return; }
+    await loadWord();
+  }
+
+  if (!current) return <main style={{ padding: 24 }}>Loading…</main>;
+
+  return (
+    <main style={{ padding: 24, display: 'grid', gap: 16 }}>
+      <h1>Teeline Collector</h1>
+      <div><strong>Meanings:</strong> {current.meanings.join(', ')}</div>
+
+      {/* Reference paths, auto-fitted to top-left via preserveAspectRatio */}
+      <svg
+        ref={refSvgRef}
+        width={400}
+        height={140}
+        viewBox={viewBox}
+        preserveAspectRatio="xMinYMin meet"
+        style={{ border: '1px solid #ccc', borderRadius: 8, background: 'white' }}
+      >
+        <g ref={refGroupRef}>
+          {current.reference_paths.map((d, i) => (
+            <path key={i} d={d} fill="none" stroke="black" strokeWidth={2} />
+          ))}
+        </g>
+      </svg>
+
+      {/* User drawing surface (separate 400x140 coordinate space) */}
+      <svg
+        ref={svgRef}
+        width={400}
+        height={140}
+        style={{ border: '2px dashed #999', borderRadius: 8, touchAction: 'none', background: 'white' }}
+        onPointerDown={pointerDown}
+        onPointerMove={pointerMove}
+        onPointerUp={pointerUp}
+        onPointerLeave={pointerUp}
+      >
+        {userPath && <path d={userPath} fill="none" stroke="black" strokeWidth={2} />}
+      </svg>
+
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button onClick={() => { setUserPath(''); setPoints(''); }}>Clear</button>
+        <button onClick={submit}>Save & Next</button>
+      </div>
+    </main>
   );
 }
