@@ -6,29 +6,29 @@ type WordRow = { id: string; meanings: string[]; reference_paths: string[] };
 
 export default function Home() {
   const [current, setCurrent] = useState<WordRow | null>(null);
-  const [userPaths, setUserPaths] = useState<string[]>([]); // multiple strokes
-  const [points, setPoints] = useState<string>(''); // building current stroke
+
+  // Drawing state
+  const [userPaths, setUserPaths] = useState<string[]>([]); // finalized strokes
+  const [currentPoints, setCurrentPoints] = useState<string>(''); // stroke in progress
   const drawing = useRef(false);
 
-  // refs for drawing surface
+  // Refs for SVGs
   const svgRef = useRef<SVGSVGElement | null>(null);
-
-  // refs for reference paths measurement
-  const refSvgRef = useRef<SVGSVGElement | null>(null);
   const refGroupRef = useRef<SVGGElement | null>(null);
   const [viewBox, setViewBox] = useState<string>('0 0 400 140');
 
+  // Load a random word
   async function loadWord() {
     const { data, error } = await supabase.rpc('get_random_word');
     if (error) console.error(error);
     if (data && data.length) setCurrent(data[0]);
     setUserPaths([]);
-    setPoints('');
+    setCurrentPoints('');
   }
 
   useEffect(() => { loadWord(); }, []);
 
-  // Measure the true bounds of all reference paths
+  // Compute bounding box for reference paths
   useEffect(() => {
     if (!current) return;
     const pad = 16;
@@ -53,24 +53,26 @@ export default function Home() {
   function pointerDown(e: React.PointerEvent<SVGSVGElement>) {
     drawing.current = true;
     const p = cursor(e);
-    setPoints(`${p.x},${p.y}`);
+    setCurrentPoints(`${p.x},${p.y}`);
   }
 
   function pointerMove(e: React.PointerEvent<SVGSVGElement>) {
     if (!drawing.current) return;
     const p = cursor(e);
-    setPoints(prev => (prev ? `${prev} ${p.x},${p.y}` : `${p.x},${p.y}`));
+    setCurrentPoints(prev =>
+      prev ? `${prev} ${p.x},${p.y}` : `${p.x},${p.y}`
+    );
   }
 
   function pointerUp() {
-    if (points) {
-      const pts = points.split(' ');
+    if (currentPoints) {
+      const pts = currentPoints.split(' ');
       const path = pts.reduce((acc, xy, i) => {
         const [x, y] = xy.split(',');
         return acc + (i === 0 ? `M${x} ${y}` : ` L${x} ${y}`);
       }, '');
-      setUserPaths(prev => [...prev, path]);
-      setPoints('');
+      setUserPaths(prev => [...prev, path]); // ✅ accumulate strokes
+      setCurrentPoints('');
     }
     drawing.current = false;
   }
@@ -85,13 +87,17 @@ export default function Home() {
     return { x: Math.round(p.x), y: Math.round(p.y) };
   }
 
+  // Submit drawing
   async function submit() {
-    if (!current || userPaths.length === 0) { alert('Draw something first'); return; }
+    if (!current || userPaths.length === 0) {
+      alert('Draw something first');
+      return;
+    }
     const { error } = await supabase.from('drawings').insert({
       word_id: current.id,
       meanings: current.meanings,
       reference_paths: current.reference_paths,
-      user_paths: userPaths, // store all strokes
+      user_paths: userPaths, // ✅ all strokes
       client_id: typeof window !== 'undefined' ? window.navigator.userAgent : null
     });
     if (error) { console.error(error); alert('Save failed'); return; }
@@ -105,9 +111,8 @@ export default function Home() {
       <h1>Teeline Collector</h1>
       <div><strong>Meanings:</strong> {current.meanings.join(', ')}</div>
 
-      {/* Reference paths, auto-scaled */}
+      {/* Reference paths */}
       <svg
-        ref={refSvgRef}
         width={400}
         height={140}
         viewBox={viewBox}
@@ -121,7 +126,7 @@ export default function Home() {
         </g>
       </svg>
 
-      {/* User drawing surface */}
+      {/* Drawing surface */}
       <svg
         ref={svgRef}
         width={400}
@@ -136,10 +141,10 @@ export default function Home() {
         {userPaths.map((d, i) => (
           <path key={i} d={d} fill="none" stroke="black" strokeWidth={2} />
         ))}
-        {/* Current stroke in progress */}
-        {points && (
+        {/* Current stroke (red) */}
+        {currentPoints && (
           <path
-            d={points.split(' ').reduce((acc, xy, i) => {
+            d={currentPoints.split(' ').reduce((acc, xy, i) => {
               const [x, y] = xy.split(',');
               return acc + (i === 0 ? `M${x} ${y}` : ` L${x} ${y}`);
             }, '')}
@@ -151,7 +156,7 @@ export default function Home() {
       </svg>
 
       <div style={{ display: 'flex', gap: 8 }}>
-        <button onClick={() => { setUserPaths([]); setPoints(''); }}>Clear</button>
+        <button onClick={() => { setUserPaths([]); setCurrentPoints(''); }}>Clear</button>
         <button onClick={submit}>Save & Next</button>
       </div>
     </main>
