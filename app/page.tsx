@@ -6,8 +6,8 @@ type WordRow = { id: string; meanings: string[]; reference_paths: string[] };
 
 export default function Home() {
   const [current, setCurrent] = useState<WordRow | null>(null);
-  const [userPath, setUserPath] = useState<string>('');
-  const [points, setPoints] = useState<string>('');
+  const [userPaths, setUserPaths] = useState<string[]>([]); // multiple strokes
+  const [points, setPoints] = useState<string>(''); // building current stroke
   const drawing = useRef(false);
 
   // refs for drawing surface
@@ -22,54 +22,58 @@ export default function Home() {
     const { data, error } = await supabase.rpc('get_random_word');
     if (error) console.error(error);
     if (data && data.length) setCurrent(data[0]);
-    setUserPath('');
+    setUserPaths([]);
     setPoints('');
   }
 
   useEffect(() => { loadWord(); }, []);
 
-  // Measure the true bounds of all reference paths and set a viewBox that hugs the content.
+  // Measure the true bounds of all reference paths
   useEffect(() => {
     if (!current) return;
     const pad = 16;
-
-    // Wait a tick so paths are in the DOM before measuring
     const id = requestAnimationFrame(() => {
       try {
         const g = refGroupRef.current;
         if (!g) return;
-        const box = g.getBBox(); // accurate for lines/curves/arc control points
+        const box = g.getBBox();
         const x = box.x - pad;
         const y = box.y - pad;
         const w = Math.max(box.width + pad * 2, 1);
         const h = Math.max(box.height + pad * 2, 1);
         setViewBox(`${x} ${y} ${w} ${h}`);
-      } catch (e) {
-        // Fallback if getBBox fails
+      } catch {
         setViewBox('0 0 400 140');
       }
     });
     return () => cancelAnimationFrame(id);
   }, [current]);
 
-  // --- Drawing handlers (fixed 400x140 canvas) ---
+  // --- Drawing handlers ---
   function pointerDown(e: React.PointerEvent<SVGSVGElement>) {
     drawing.current = true;
     const p = cursor(e);
     setPoints(`${p.x},${p.y}`);
   }
+
   function pointerMove(e: React.PointerEvent<SVGSVGElement>) {
     if (!drawing.current) return;
     const p = cursor(e);
     setPoints(prev => (prev ? `${prev} ${p.x},${p.y}` : `${p.x},${p.y}`));
-    const pts = (points ? `${points} ${p.x},${p.y}` : `${p.x},${p.y}`).split(' ');
-    const path = pts.reduce((acc, xy, i) => {
-      const [x, y] = xy.split(',');
-      return acc + (i === 0 ? `M${x} ${y}` : ` L${x} ${y}`);
-    }, '');
-    setUserPath(path);
   }
-  function pointerUp() { drawing.current = false; }
+
+  function pointerUp() {
+    if (points) {
+      const pts = points.split(' ');
+      const path = pts.reduce((acc, xy, i) => {
+        const [x, y] = xy.split(',');
+        return acc + (i === 0 ? `M${x} ${y}` : ` L${x} ${y}`);
+      }, '');
+      setUserPaths(prev => [...prev, path]);
+      setPoints('');
+    }
+    drawing.current = false;
+  }
 
   function cursor(e: React.PointerEvent<SVGSVGElement>) {
     const svg = svgRef.current!;
@@ -82,12 +86,12 @@ export default function Home() {
   }
 
   async function submit() {
-    if (!current || !userPath) { alert('Draw something first'); return; }
+    if (!current || userPaths.length === 0) { alert('Draw something first'); return; }
     const { error } = await supabase.from('drawings').insert({
       word_id: current.id,
       meanings: current.meanings,
       reference_paths: current.reference_paths,
-      user_path: userPath,
+      user_paths: userPaths, // store all strokes
       client_id: typeof window !== 'undefined' ? window.navigator.userAgent : null
     });
     if (error) { console.error(error); alert('Save failed'); return; }
@@ -101,7 +105,7 @@ export default function Home() {
       <h1>Teeline Collector</h1>
       <div><strong>Meanings:</strong> {current.meanings.join(', ')}</div>
 
-      {/* Reference paths, auto-fitted to top-left via preserveAspectRatio */}
+      {/* Reference paths, auto-scaled */}
       <svg
         ref={refSvgRef}
         width={400}
@@ -117,7 +121,7 @@ export default function Home() {
         </g>
       </svg>
 
-      {/* User drawing surface (separate 400x140 coordinate space) */}
+      {/* User drawing surface */}
       <svg
         ref={svgRef}
         width={400}
@@ -128,11 +132,26 @@ export default function Home() {
         onPointerUp={pointerUp}
         onPointerLeave={pointerUp}
       >
-        {userPath && <path d={userPath} fill="none" stroke="black" strokeWidth={2} />}
+        {/* Finalized strokes */}
+        {userPaths.map((d, i) => (
+          <path key={i} d={d} fill="none" stroke="black" strokeWidth={2} />
+        ))}
+        {/* Current stroke in progress */}
+        {points && (
+          <path
+            d={points.split(' ').reduce((acc, xy, i) => {
+              const [x, y] = xy.split(',');
+              return acc + (i === 0 ? `M${x} ${y}` : ` L${x} ${y}`);
+            }, '')}
+            fill="none"
+            stroke="red"
+            strokeWidth={2}
+          />
+        )}
       </svg>
 
       <div style={{ display: 'flex', gap: 8 }}>
-        <button onClick={() => { setUserPath(''); setPoints(''); }}>Clear</button>
+        <button onClick={() => { setUserPaths([]); setPoints(''); }}>Clear</button>
         <button onClick={submit}>Save & Next</button>
       </div>
     </main>
